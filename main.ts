@@ -1,7 +1,7 @@
 // main.ts
 const VALID_API_KEY = "274F20CCF87d4524b679be1C39dFecea";
 // ========= 请修改这里：上游 Ollama / 兼容接口地址 =========
-const UPSTREAM_BASE = "https://替换为你的上游ollama兼容地址";
+const UPSTREAM_BASE = "https://ollama.com/api";
 // =======================================================
 
 const CORS_HEADERS = {
