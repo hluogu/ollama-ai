@@ -10,29 +10,23 @@ const CORS_HEADERS = {
 };
 
 async function handleRequest(req: Request): Promise<Response> {
+  // 跨域预检：直接放行，不校验Token！
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
 
-  let targetReq: Request;
+  // GET自动转为POST处理
+  let workReq: Request;
   if (req.method === "GET") {
-    // GET 自动转为 POST
-    targetReq = new Request(req.url, {
-      method: "POST",
-      headers: req.headers,
-      body: req.body,
-      redirect: req.redirect
-    });
+    workReq = new Request(req, { method: "POST" });
   } else if (req.method === "POST") {
-    targetReq = req;
+    workReq = req;
   } else {
-    return new Response(
-      JSON.stringify({ error: `不支持 ${req.method}` }),
-      { status: 405, headers: CORS_HEADERS }
-    );
+    return new Response(JSON.stringify({error:"只支持GET/POST/OPTIONS"}), {status:405, headers:CORS_HEADERS});
   }
 
-  const auth = targetReq.headers.get("Authorization");
+  // GET/POST 请求才校验鉴权
+  const auth = workReq.headers.get("Authorization");
   if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
       status: 401, headers: CORS_HEADERS
@@ -40,7 +34,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   try {
-    const clientPayload = await targetReq.json();
+    const clientPayload = await workReq.json();
     const openaiBody = {
       model: MODEL_ID,
       messages: clientPayload.messages,
