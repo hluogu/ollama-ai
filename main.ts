@@ -5,25 +5,34 @@ const MODEL_ID = "deepseek-v4-flash";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
 
 async function handleRequest(req: Request): Promise<Response> {
-  // 跨域预检
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
 
-  // ========== 关键日志 + 清晰405提示 ==========
-  if (req.method !== "POST") {
+  let targetReq: Request;
+  if (req.method === "GET") {
+    // GET 自动转为 POST
+    targetReq = new Request(req.url, {
+      method: "POST",
+      headers: req.headers,
+      body: req.body,
+      redirect: req.redirect
+    });
+  } else if (req.method === "POST") {
+    targetReq = req;
+  } else {
     return new Response(
-      JSON.stringify({error:`禁止使用 ${req.method}，仅支持 POST 请求`}),
+      JSON.stringify({ error: `不支持 ${req.method}` }),
       { status: 405, headers: CORS_HEADERS }
     );
   }
 
-  const auth = req.headers.get("Authorization");
+  const auth = targetReq.headers.get("Authorization");
   if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
       status: 401, headers: CORS_HEADERS
@@ -31,7 +40,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   try {
-    const clientPayload = await req.json();
+    const clientPayload = await targetReq.json();
     const openaiBody = {
       model: MODEL_ID,
       messages: clientPayload.messages,
