@@ -10,12 +10,20 @@ const CORS_HEADERS = {
 };
 
 async function handleRequest(req: Request): Promise<Response> {
-  // 跨域预检：直接放行，不校验Token！
+  // OPTIONS预检：优先放行
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: CORS_HEADERS });
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // GET自动转为POST处理
+  const url = new URL(req.url);
+  // 【重点】浏览器自动发起的裸GET访问首页，直接放行鉴权，避免401刷屏
+  if(req.method === "GET" && url.pathname === "/"){
+    return new Response(JSON.stringify({status:"ok","tip":"请使用POST携带JSON请求体调用接口"}), {
+      headers: {...CORS_HEADERS, "Content-Type":"application/json"}
+    });
+  }
+
+  // GET强制转为POST处理业务请求
   let workReq: Request;
   if (req.method === "GET") {
     workReq = new Request(req, { method: "POST" });
@@ -25,7 +33,7 @@ async function handleRequest(req: Request): Promise<Response> {
     return new Response(JSON.stringify({error:"只支持GET/POST/OPTIONS"}), {status:405, headers:CORS_HEADERS});
   }
 
-  // GET/POST 请求才校验鉴权
+  // 业务请求鉴权校验
   const auth = workReq.headers.get("Authorization");
   if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
