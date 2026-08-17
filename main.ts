@@ -1,97 +1,77 @@
-// main.ts
-// 你的代理访问密钥
-const PROXY_ACCESS_KEY = "274F20CCF87d4524b679be1C39dFecea";
-// 上游固定 Ollama Cloud
-const OLLAMA_UPSTREAM = "https://ollama.com";
-const DEFAULT_MODEL = "deepseek-v4-flash:cloud";
-// 【重要】填入你自己 Ollama 官网账号的 API Key，否则调用cloud模型会鉴权失败
-const OLLAMA_ACCOUNT_TOKEN = "";
+const PROXY_TOKEN = "274f20ccf87d4524b679be1c39dfecea";
+const OPENMODEL_API_KEY = "om-eiiRoojesXRXjgQDnPcfpaiPHnSmDr469AHAWfxsL";
+const UPSTREAM = "https://api.openmodel.ai/v1/chat/completions";
+const MODEL_ID = "deepseek-v4-flash";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type,Authorization",
-  "Access-Control-Max-Age": "86400",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
 
 async function handleRequest(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-
-  // 跨域预检请求，直接放行，不鉴权
+  // 跨域预检处理
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Only POST supported" }), {
+      status: 405, headers: CORS_HEADERS
+    });
+  }
 
-  // 代理权限校验：Header Bearer 或者 url ?key=xxx
-  const authHeader = req.headers.get("Authorization");
-  const queryKey = url.searchParams.get("key");
-  let authOK = false;
-  if (authHeader === `Bearer ${PROXY_ACCESS_KEY}`) authOK = true;
-  if (queryKey === PROXY_ACCESS_KEY) authOK = true;
-
-  if (!authOK) {
-    return Response.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
+  // 代理鉴权校验
+  const auth = req.headers.get("Authorization");
+  if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
+    return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
+      status: 401, headers: CORS_HEADERS
+    });
   }
 
   try {
-    // GET 简易链接模式：浏览器直接打开
-    if (req.method === "GET" && url.pathname === "/api/chat") {
-      const userMsg = url.searchParams.get("message");
-      if (!userMsg) {
-        return Response.json({ error: "缺少参数 message" }, { status: 400, headers: CORS_HEADERS });
-      }
-      const payload = {
-        model: DEFAULT_MODEL,
-        messages: [{ role: "user", content: userMsg }],
-        stream: false
-      };
-      const upstreamHeaders: Record<string, string> = {
-        "Content-Type": "application/json"
-      };
-      // 如果填写了Ollama账号token，则带上
-      if (OLLAMA_ACCOUNT_TOKEN) {
-        upstreamHeaders["Authorization"] = `Bearer ${OLLAMA_ACCOUNT_TOKEN}`;
-      }
+    const clientPayload = await req.json();
+    // Ollama消息结构 → OpenAI标准载荷
+    const openaiBody = {
+      model: MODEL_ID,
+      messages: clientPayload.messages,
+      stream: !!clientPayload.stream
+    };
 
-      const upstreamRes = await fetch(`${OLLAMA_UPSTREAM}/api/chat`, {
-        method: "POST",
-        headers: upstreamHeaders,
-        body: JSON.stringify(payload)
-      });
+    const upstreamResponse = await fetch(UPSTREAM, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENMODEL_API_KEY}`
+      },
+      body: JSON.stringify(openaiBody)
+    });
 
-      const data = await upstreamRes.json();
-      return Response.json(data, { headers: CORS_HEADERS });
-    }
-
-    // POST 标准接口，供Scratch扩展使用
-    if (req.method === "POST" && url.pathname === "/api/chat") {
-      const targetUrl = new URL("/api/chat", OLLAMA_UPSTREAM);
-      const newHeaders = new Headers(req.headers);
-      newHeaders.delete("Authorization");
-      if (OLLAMA_ACCOUNT_TOKEN) {
-        newHeaders.set("Authorization", `Bearer ${OLLAMA_ACCOUNT_TOKEN}`);
-      }
-
-      const upstreamRes = await fetch(targetUrl, {
-        method: "POST",
-        headers: newHeaders,
-        body: req.body
-      });
-
-      const outHeaders = new Headers(upstreamRes.headers);
-      Object.entries(CORS_HEADERS).forEach(([k, v]) => outHeaders.set(k, v));
-      return new Response(upstreamRes.body, {
-        status: upstreamRes.status,
-        headers: outHeaders
+    // 流式响应直接透传
+    if (openaiBody.stream) {
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        headers: { ...CORS_HEADERS, ...Object.fromEntries(upstreamResponse.headers) }
       });
     }
 
-    return Response.json({ error: "Not Found" }, { status: 404, headers: CORS_HEADERS });
-  } catch (err) {
-    return Response.json(
-      { error: "服务器内部异常", detail: String(err) },
-      { status: 500, headers: CORS_HEADERS }
-    );
+    // OpenAI返回 → 封装为Ollama格式，适配你现有积木解析路径 message.content
+    const data = await upstreamResponse.json();
+    const ollamaStyleResp = {
+      model: MODEL_ID,
+      message: {
+        role: "assistant",
+        content: data?.choices?.[0]?.message?.content ?? ""
+      }
+    };
+
+    return new Response(JSON.stringify(ollamaStyleResp), {
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+    });
+
+  } catch (e) {
+    return new Response(JSON.stringify({ error: String(e) }), {
+      status: 500, headers: CORS_HEADERS
+    });
   }
 }
 
