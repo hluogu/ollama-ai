@@ -10,17 +10,19 @@ const CORS_HEADERS = {
 };
 
 async function handleRequest(req: Request): Promise<Response> {
-  // 跨域预检处理
+  // 跨域预检
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
+
+  // ========== 关键日志 + 清晰405提示 ==========
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Only POST supported" }), {
-      status: 405, headers: CORS_HEADERS
-    });
+    return new Response(
+      JSON.stringify({error:`禁止使用 ${req.method}，仅支持 POST 请求`}),
+      { status: 405, headers: CORS_HEADERS }
+    );
   }
 
-  // 代理鉴权校验
   const auth = req.headers.get("Authorization");
   if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
@@ -30,7 +32,6 @@ async function handleRequest(req: Request): Promise<Response> {
 
   try {
     const clientPayload = await req.json();
-    // Ollama消息结构 → OpenAI标准载荷
     const openaiBody = {
       model: MODEL_ID,
       messages: clientPayload.messages,
@@ -46,7 +47,6 @@ async function handleRequest(req: Request): Promise<Response> {
       body: JSON.stringify(openaiBody)
     });
 
-    // 流式响应直接透传
     if (openaiBody.stream) {
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
@@ -54,7 +54,6 @@ async function handleRequest(req: Request): Promise<Response> {
       });
     }
 
-    // OpenAI返回 → 封装为Ollama格式，适配你现有积木解析路径 message.content
     const data = await upstreamResponse.json();
     const ollamaStyleResp = {
       model: MODEL_ID,
