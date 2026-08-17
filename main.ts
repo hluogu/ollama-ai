@@ -1,7 +1,9 @@
 // main.ts
 const VALID_API_KEY = "274F20CCF87d4524b679be1C39dFecea";
-const UPSTREAM_OLLAMA_ENDPOINT = "填写上游Ollama兼容地址";
+// =========【必须修改】填入上游 Ollama 兼容接口地址 =========
+const UPSTREAM_OLLAMA_ENDPOINT = "https://xxx";
 const DEFAULT_MODEL = "deepseek-v4-flash:cloud";
+// ========================================================
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -13,74 +15,86 @@ const CORS_HEADERS = {
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
 
-  // CORS预检
+  // OPTIONS预检：直接放行，不做鉴权！解决浏览器跨域401
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
   }
 
-  // 鉴权
+  // 双方式鉴权：Header Bearer 或者 url ?key=xxx
+  let authorized = false;
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader || authHeader !== `Bearer ${VALID_API_KEY}`) {
+  const urlKey = url.searchParams.get("key");
+
+  if (authHeader && authHeader === `Bearer ${VALID_API_KEY}`) {
+    authorized = true;
+  }
+  if (urlKey === VALID_API_KEY) {
+    authorized = true;
+  }
+
+  if (!authorized) {
     return Response.json(
-      { error: "Authorization 密钥无效" },
+      { error: "密钥验证失败" },
       { status: 401, headers: CORS_HEADERS }
     );
   }
 
-  // =====================
-  // GET /api/chat?message=xxx 简易链接模式
-  // =====================
-  if (req.method === "GET" && url.pathname === "/api/chat") {
-    const userMsg = url.searchParams.get("message");
-    if (!userMsg) {
-      return Response.json(
-        { error: "URL参数缺少 message" },
-        { status: 400, headers: CORS_HEADERS }
-      );
+  try {
+    // GET /api/chat?message=xxx&key=xxx
+    if (req.method === "GET" && url.pathname === "/api/chat") {
+      const userMsg = url.searchParams.get("message");
+      if (!userMsg) {
+        return Response.json(
+          { error: "缺少参数 message" },
+          { status: 400, headers: CORS_HEADERS }
+        );
+      }
+
+      const payload = {
+        model: DEFAULT_MODEL,
+        messages: [{ role: "user", content: userMsg }],
+        stream: false,
+      };
+
+      const upstreamUrl = new URL("/api/chat", UPSTREAM_OLLAMA_ENDPOINT);
+      const upstreamResp = await fetch(upstreamUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await upstreamResp.json();
+      return Response.json(data, { headers: CORS_HEADERS });
     }
 
-    // 构造标准ollama chat请求体
-    const payload = {
-      model: DEFAULT_MODEL,
-      messages: [{ role: "user", content: userMsg }],
-      stream: false,
-    };
+    // POST /api/chat 标准接口（Scratch扩展使用）
+    if (req.method === "POST" && url.pathname === "/api/chat") {
+      const upstreamUrl = new URL("/api/chat", UPSTREAM_OLLAMA_ENDPOINT);
+      const newHeaders = new Headers(req.headers);
+      newHeaders.delete("Authorization");
 
-    const upstreamUrl = new URL("/api/chat", UPSTREAM_OLLAMA_ENDPOINT);
-    const upstreamResp = await fetch(upstreamUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+      const proxyResp = await fetch(upstreamUrl, {
+        method: "POST",
+        headers: newHeaders,
+        body: req.body,
+      });
 
-    const data = await upstreamResp.json();
-    const resultHeaders = new Headers(CORS_HEADERS);
-    return Response.json(data, { headers: resultHeaders });
+      const outHeaders = new Headers(proxyResp.headers);
+      Object.entries(CORS_HEADERS).forEach(([k, v]) => outHeaders.set(k, v));
+      return new Response(proxyResp.body, {
+        status: proxyResp.status,
+        headers: outHeaders,
+      });
+    }
+
+    return Response.json({ error: "路由不存在" }, { status: 404, headers: CORS_HEADERS });
+  } catch (err) {
+    // 捕获所有异常，确保永远返回JSON，不会出现纯文本Internal Server Error
+    return Response.json(
+      { error: "服务器内部异常", detail: String(err) },
+      { status: 500, headers: CORS_HEADERS }
+    );
   }
-
-  // =====================
-  // 原有POST /api/chat 兼容模式（供Scratch扩展继续使用）
-  // =====================
-  if (req.method === "POST" && url.pathname === "/api/chat") {
-    const upstreamUrl = new URL("/api/chat", UPSTREAM_OLLAMA_ENDPOINT);
-    const newHeaders = new Headers(req.headers);
-    newHeaders.delete("Authorization");
-
-    const proxyResp = await fetch(upstreamUrl, {
-      method: "POST",
-      headers: newHeaders,
-      body: req.body,
-    });
-
-    const outHeaders = new Headers(proxyResp.headers);
-    Object.entries(CORS_HEADERS).forEach(([k, v]) => outHeaders.set(k, v));
-    return new Response(proxyResp.body, {
-      status: proxyResp.status,
-      headers: outHeaders,
-    });
-  }
-
-  return Response.json({ error: "路由不存在" }, { status: 404, headers: CORS_HEADERS });
 }
 
 Deno.serve(handleRequest);
