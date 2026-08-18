@@ -15,22 +15,16 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   const url = new URL(req.url);
-  if(req.method === "GET" && url.pathname === "/"){
-    return new Response(JSON.stringify({status:"ok","tip":"请使用POST携带JSON请求体调用接口"}), {
+
+  // 裸访问首页
+  if(url.pathname === "/" && url.search === ""){
+    return new Response(JSON.stringify({status:"ok","tip":"GET调用格式: /?data=URL编码后的JSON"}), {
       headers: {...CORS_HEADERS, "Content-Type":"application/json"}
     });
   }
 
-  let workReq: Request;
-  if (req.method === "GET") {
-    workReq = new Request(req, { method: "POST" });
-  } else if (req.method === "POST") {
-    workReq = req;
-  } else {
-    return new Response(JSON.stringify({error:"只支持GET/POST/OPTIONS"}), {status:405, headers:CORS_HEADERS});
-  }
-
-  const auth = workReq.headers.get("Authorization");
+  // 鉴权校验
+  const auth = req.headers.get("Authorization");
   if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
       status: 401, headers: CORS_HEADERS
@@ -38,7 +32,11 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   try {
-    const clientPayload = await workReq.json();
+    // 从url读取data参数
+    const rawData = url.searchParams.get("data");
+    if(!rawData) throw new Error("缺少data参数");
+    const clientPayload = JSON.parse(decodeURIComponent(rawData));
+
     const openaiBody = {
       model: MODEL_ID,
       messages: clientPayload.messages,
@@ -75,7 +73,7 @@ async function handleRequest(req: Request): Promise<Response> {
     });
 
   } catch (e) {
-    return new Response(JSON.stringify({ error: "JSON解析失败，请使用POST携带合法JSON", detail: String(e) }), {
+    return new Response(JSON.stringify({ error: String(e) }), {
       status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
     });
   }
