@@ -10,22 +10,19 @@ const CORS_HEADERS = {
 };
 
 async function handleRequest(req: Request): Promise<Response> {
-  // 跨域预检
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   const url = new URL(req.url);
-
-  // 鉴权
-  const auth = req.headers.get("Authorization");
-  if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
+  // 从url读取token，不再读取Header
+  const clientToken = url.searchParams.get("token");
+  if (!clientToken || clientToken !== PROXY_TOKEN) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
       status: 401, headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
     });
   }
 
-  // 读取url参数 data
   const rawParam = url.searchParams.get("data");
   if (!rawParam) {
     return new Response(JSON.stringify({ error: "缺少 ?data=URL编码JSON 参数" }), {
@@ -50,7 +47,6 @@ async function handleRequest(req: Request): Promise<Response> {
       body: JSON.stringify(requestBody)
     });
 
-    // 流式返回
     if(requestBody.stream){
       return new Response(upstreamRes.body, {
         status: upstreamRes.status,
@@ -58,7 +54,6 @@ async function handleRequest(req: Request): Promise<Response> {
       });
     }
 
-    // 非流式 ollama 格式封装
     const data = await upstreamRes.json();
     const result = {
       model: MODEL_ID,
