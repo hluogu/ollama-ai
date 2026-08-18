@@ -10,71 +10,70 @@ const CORS_HEADERS = {
 };
 
 async function handleRequest(req: Request): Promise<Response> {
+  // 跨域预检
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   const url = new URL(req.url);
 
-  // 裸访问首页
-  if(url.pathname === "/" && url.search === ""){
-    return new Response(JSON.stringify({status:"ok","tip":"GET调用格式: /?data=URL编码后的JSON"}), {
-      headers: {...CORS_HEADERS, "Content-Type":"application/json"}
-    });
-  }
-
-  // 鉴权校验
+  // 鉴权
   const auth = req.headers.get("Authorization");
   if (!auth || auth !== `Bearer ${PROXY_TOKEN}`) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
-      status: 401, headers: CORS_HEADERS
+      status: 401, headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
+    });
+  }
+
+  // 读取url参数 data
+  const rawParam = url.searchParams.get("data");
+  if (!rawParam) {
+    return new Response(JSON.stringify({ error: "缺少 ?data=URL编码JSON 参数" }), {
+      status: 400, headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
     });
   }
 
   try {
-    // 从url读取data参数
-    const rawData = url.searchParams.get("data");
-    if(!rawData) throw new Error("缺少data参数");
-    const clientPayload = JSON.parse(decodeURIComponent(rawData));
-
-    const openaiBody = {
+    const payload = JSON.parse(decodeURIComponent(rawParam));
+    const requestBody = {
       model: MODEL_ID,
-      messages: clientPayload.messages,
-      stream: !!clientPayload.stream
+      messages: payload.messages,
+      stream: !!payload.stream
     };
 
-    const upstreamResponse = await fetch(UPSTREAM, {
+    const upstreamRes = await fetch(UPSTREAM, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${OPENMODEL_API_KEY}`
       },
-      body: JSON.stringify(openaiBody)
+      body: JSON.stringify(requestBody)
     });
 
-    if (openaiBody.stream) {
-      return new Response(upstreamResponse.body, {
-        status: upstreamResponse.status,
-        headers: { ...CORS_HEADERS, ...Object.fromEntries(upstreamResponse.headers) }
+    // 流式返回
+    if(requestBody.stream){
+      return new Response(upstreamRes.body, {
+        status: upstreamRes.status,
+        headers: { ...CORS_HEADERS, ...Object.fromEntries(upstreamRes.headers) }
       });
     }
 
-    const data = await upstreamResponse.json();
-    const ollamaStyleResp = {
+    // 非流式 ollama 格式封装
+    const data = await upstreamRes.json();
+    const result = {
       model: MODEL_ID,
       message: {
         role: "assistant",
         content: data?.choices?.[0]?.message?.content ?? ""
       }
     };
-
-    return new Response(JSON.stringify(ollamaStyleResp), {
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+    return new Response(JSON.stringify(result), {
+      headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
     });
 
-  } catch (e) {
-    return new Response(JSON.stringify({ error: String(e) }), {
-      status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 400, headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
     });
   }
 }
