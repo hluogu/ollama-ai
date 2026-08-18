@@ -15,7 +15,6 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   const url = new URL(req.url);
-  // 从url读取token，不再读取Header
   const clientToken = url.searchParams.get("token");
   if (!clientToken || clientToken !== PROXY_TOKEN) {
     return new Response(JSON.stringify({ error: "Unauthorized proxy token" }), {
@@ -25,7 +24,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
   const rawParam = url.searchParams.get("data");
   if (!rawParam) {
-    return new Response(JSON.stringify({ error: "缺少 ?data=URL编码JSON 参数" }), {
+    return new Response(JSON.stringify({ error: "缺少 data 参数" }), {
       status: 400, headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
     });
   }
@@ -38,6 +37,8 @@ async function handleRequest(req: Request): Promise<Response> {
       stream: !!payload.stream
     };
 
+    console.log("向上游发送请求体：", requestBody);
+
     const upstreamRes = await fetch(UPSTREAM, {
       method: "POST",
       headers: {
@@ -47,20 +48,22 @@ async function handleRequest(req: Request): Promise<Response> {
       body: JSON.stringify(requestBody)
     });
 
+    const upstreamJson = await upstreamRes.json();
+    console.log("上游原始返回：", upstreamJson);
+
     if(requestBody.stream){
-      return new Response(upstreamRes.body, {
-        status: upstreamRes.status,
-        headers: { ...CORS_HEADERS, ...Object.fromEntries(upstreamRes.headers) }
+      return new Response(JSON.stringify({warn:"流式暂不支持GET调用"}), {
+        headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
       });
     }
 
-    const data = await upstreamRes.json();
     const result = {
       model: MODEL_ID,
       message: {
         role: "assistant",
-        content: data?.choices?.[0]?.message?.content ?? ""
-      }
+        content: upstreamJson?.choices?.[0]?.message?.content ?? ""
+      },
+      raw: upstreamJson
     };
     return new Response(JSON.stringify(result), {
       headers: { ...CORS_HEADERS, "Content-Type":"application/json" }
